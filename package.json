@@ -19,6 +19,7 @@
   "homepage": "https://github.com/BNBBingo/bnbbingo_backend#readme",
   "dependencies": {
     "abi-decoder": "^2.4.0",
+    "axios": "^0.25.0",
     "cors": "^2.8.5",
     "dotenv": "^14.2.0",
     "ethereumjs-tx": "^1.3.7",
