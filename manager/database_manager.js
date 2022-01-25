@@ -111,7 +111,7 @@ async function updateSyncBlocNumber(value) {
 
     try {
         connection = await connect();
-        ret = await _updateStatusValue(connection, CONST.STATUS_KEY.SYNC_BLOCK_NUMBER, value);
+        ret = await _updateStatusValue(connection, CONST.STATUS_KEY.SYNC_EVENT_BLOCK_NUMBER, value);
         connection.release();
     } catch (err) {
         console.log(err);
@@ -132,7 +132,7 @@ async function updateCurrentRoundID(value, blockNumber) {
             throw new Error('Updating current round id failed.');
         }
 
-        if (!await _updateStatusValue(connection, CONST.STATUS_KEY.SYNC_BLOCK_NUMBER, blockNumber)) {
+        if (!await _updateStatusValue(connection, CONST.STATUS_KEY.SYNC_EVENT_BLOCK_NUMBER, blockNumber)) {
             throw new Error('Updating synchronized block number failed.');
         }
 
@@ -158,14 +158,15 @@ async function addTicket(ticketID, roundID, address, ticketNums, blockNumber) {
             throw new Error('Adding ticket failed.');
         }
 
-        if (!await _updateStatusValue(connection, CONST.STATUS_KEY.SYNC_BLOCK_NUMBER, blockNumber)) {
+        if (!await _updateStatusValue(connection, CONST.STATUS_KEY.SYNC_EVENT_BLOCK_NUMBER, blockNumber)) {
             throw new Error('Updating sync block number failed.');
         }
 
         await commitTransaction(connection);
+        connection.release();
         ret = true;
-    } catch (ex) {
-        console.log(ex);
+    } catch (err) {
+        console.log(err);
         onConnectionErr(connection, ex, true);
     }
     return ret;
@@ -177,10 +178,105 @@ async function _addTicket(connection, ticketID, roundID, address, ticketNums) {
         const query = "INSERT INTO tbl_tickets (ticket_id, round, ticket_nums, address) VALUE(?, ?, ?, ?)";
         const [rows] = await mysqlExecute(connection, query, [ticketID, roundID, ticketNums, address]);
         ret = rows.insertId > 0;
-    } catch (ex) {
-        console.log(ex);
+    } catch (err) {
+        console.log(err);
     }
     return ret;
+}
+
+async function _updateTicketStatus(connection, ticketID, status) {
+    let ret = false;
+    try {
+        const query = "UPDATE tbl_tickets SET status = ? WHERE ticket_id = ?";
+        const [rows] = await mysqlExecute(connection, query, [status, ticketID]);
+        ret = rows.affectedRows > 0;
+    } catch (err) {
+        console.log(err);
+    }
+    return ret;
+}
+
+async function claimTicket(ticketID, status, blockNumber) {
+    let ret = false;
+    let connection = false;
+    try {
+        connection = await connect();
+        await startTransactions(connection);
+
+        if (!await _updateTicketStatus(connection, ticketID, status)) {
+            throw new Error('Updating ticket status failed.');
+        }
+
+        if (!await _updateStatusValue(connection, CONST.STATUS_KEY.SYNC_EVENT_BLOCK_NUMBER, blockNumber)) {
+            throw new Error('Updating sync block number failed.');
+        }
+        await commitTransaction(connection);
+        connection.release();
+        ret = true;
+    } catch (err) {
+        console.log(err);
+        onConnectionErr(connection, err, true);
+    }
+    return ret;
+}
+
+async function getTicketsByRound(roundID) {
+    let connection = null;
+    let res = null;
+
+    try {
+        connection = await connect();
+        const query = "SELECT * FROM tbl_tickets WHERE round = ?";
+        const [rows] = await mysqlExecute(connection, query, [roundID]);
+        connection.release();
+        res = rows;
+    } catch (err) {
+        console.log(err);
+        onConnectionErr(connection, err);
+    }
+    return res;
+}
+
+async function _updateTicket(connection, ticket) {
+    let res = false;
+    try {
+        const query = "UPDATE tbl_tickets SET prize = ?, status = ? WHERE ticket_id = ?";
+
+        const [rows] = await mysqlExecute(connection, query, [ticket.prize, ticket.status, ticket.ticket_id]);
+        res = rows.affectedRows > 0;
+    } catch (err) {
+        console.log(err);
+    }
+    return res;
+}
+
+async function claimRoundTickets(tickets, blockNumber) {
+    let connection = null;
+    let res = null;
+
+    try {
+        connection = await connect();
+        await startTransactions(connection);
+
+        for (let i in tickets) {
+            const ticket = tickets[i];
+            if (!await _updateTicket(connection, ticket)) {
+                throw new Error('Updating ticket failed.');
+            }
+        }
+
+        if (!await _updateStatusValue(connection, CONST.STATUS_KEY.SYNC_EVENT_BLOCK_NUMBER, blockNumber)) {
+            throw new Error()
+        }
+
+        await commitTransaction(connection);
+        connection.release();
+        res = true;
+    } catch (err) {
+        console.log(err);
+        onConnectionErr(connection, err, true);
+    }
+    return res;
 }
 
 module.exports = {
@@ -189,5 +285,8 @@ module.exports = {
     getStatusValue,
     updateSyncBlocNumber,
     updateCurrentRoundID,
-    addTicket
+    addTicket,
+    claimTicket,
+    getTicketsByRound,
+    claimRoundTickets
 }

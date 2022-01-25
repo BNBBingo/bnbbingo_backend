@@ -2,17 +2,18 @@ const axios = require('axios');
 const bnbBingoDecoder = require('abi-decoder');
 const Web3 = require('web3');
 const databaseManager = require('./manager/database_manager');
+const helpers = require('./common/helper');
 const CONST = require('./common/const');
 const BNBBingoABI = require('./contract/BNBBingo.json');
 const { text } = require('express');
 
 bnbBingoDecoder.addABI(BNBBingoABI);
 
-async function syncBNBBingo() {
-    console.log('Synchronizing BNBBingo started');
+async function syncBNBBingoEvents() {
+    console.log('Synchronizing BNBBingo Events started');
 
     const blockNumber = await databaseManager.getStatusValue(
-        CONST.STATUS_KEY.SYNC_BLOCK_NUMBER
+        CONST.STATUS_KEY.SYNC_EVENT_BLOCK_NUMBER
     );
 
     let roundID = await databaseManager.getStatusValue(
@@ -32,7 +33,7 @@ async function syncBNBBingo() {
     }
 
     if (eventData.data.status !== '1') {
-        console.log('Synchronizing BNBBingo completed');
+        console.log('Synchronizing BNBBingo Events completed');
         return;
     }
 
@@ -46,21 +47,58 @@ async function syncBNBBingo() {
             const tx = await web3.eth.getTransaction(event.transactionHash);
 
             let result = true;
+            let ticketID = 0;
 
             switch (event.topics[0]) {
                 case CONST.BNBBINGO_EVENT_NAME.START_ROUND:
-                    if (!(await databaseManager.updateCurrentRoundID(parseInt(event.topics[1].slice(2)), tx.blockNumber))) {
+                    roundID = parseInt(event.topics[1], 16);
+                    if (!(await databaseManager.updateCurrentRoundID(roundID, tx.blockNumber))) {
                         result = false;
                     }
-                    roundID = parseInt(event.topics[1].slice(2));
+                    
                     break;
                 case CONST.BNBBINGO_EVENT_NAME.BUY_TICKET:
-                    const ticketID = parseInt(event.topics[2].slice(2));
+                    ticketID = parseInt(event.topics[2], 16);
                     const address = `0x${event.topics[1].slice(26)}`;
                     const decodeData = bnbBingoDecoder.decodeMethod(tx.input);
                     const ticketNums = decodeData.params[0].value;
 
                     if (!await databaseManager.addTicket(ticketID, roundID, address, JSON.stringify(ticketNums), tx.blockNumber)) {
+                        result = false;
+                    }
+                    break;
+                case CONST.BNBBINGO_EVENT_NAME.CLAIM_TICKET:
+                    ticketID = parseInt(event.topics[1], 16);
+                    if (!await databaseManager.claimTicket(ticketID, CONST.TICKET_STATUS.CLAIMED, tx.blockNumber)) {
+                        result = false;
+                    }
+                    break;
+                case CONST.BNBBINGO_EVENT_NAME.ROUND_CLAIMED:
+                    roundID = parseInt(event.topics[1], 16);
+
+                    let tickets = await databaseManager.getTicketsByRound(roundID);
+                    for (let j = 0; j < tickets.length; j++) {
+                        try {
+                            const ticketPrize = await helpers.getPrizeByTicket(tickets[j].ticket_id);
+
+                            if (ticketPrize === null) {
+                                result = false;
+                            }
+
+                            tickets[j].prize = ticketPrize;
+                            if (ticketPrize === '0') {
+                                tickets[j].status = CONST.TICKET_STATUS.NO_PRIZE;
+                            } else {
+                                tickets[j].status = CONST.TICKET_STATUS.CLAIMABLE;
+                            }
+                        } catch (err) {
+                            console.log(err);
+                            result = false;
+                            break;
+                        }
+                    }
+
+                    if (!await databaseManager.claimRoundTickets(tickets, tx.blockNumber)) {
                         result = false;
                     }
                     break;
@@ -80,15 +118,15 @@ async function syncBNBBingo() {
                 );
             }
         }
-    } catch (ex) {
-        console.log(ex);
+    } catch (err) {
+        console.log(err);
     }
 
-    console.log('Synchronizing BNBBingo completed');
+    console.log('Synchronizing BNBBingo Events completed');
 }
 
 async function syncService() {
-    await syncBNBBingo();
+    await syncBNBBingoEvents();
 
     setTimeout(syncService, parseInt(process.env.SYNC_DELAY));
 }
